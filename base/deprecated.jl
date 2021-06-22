@@ -254,3 +254,18 @@ end
 @deprecate catch_stack(task=current_task(); include_bt=true) current_exceptions(task; backtrace=include_bt) false
 
 # END 1.7 deprecations
+
+# BEGIN 1.8 deprecations
+
+macro _inline_meta()
+    f, l = __source__.file, __source__.line
+    @warn "`Base.@_inline_meta` at $f:$l is deprecated, use the no-arg `@inline` annotation instead."
+    return :(@inline)
+end
+macro _noinline_meta()
+    f, l = __source__.file, __source__.line
+    @warn "`Base.@_noinline_meta` at $f:$l is deprecated, use the no-arg `@noinline` annotation instead."
+    return :(@noinline)
+end
+
+# END 1.8 deprecations
