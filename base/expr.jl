@@ -209,9 +209,48 @@ end
 
 !!! compat "Julia 1.8"
     The usage within a function body requires at least Julia 1.8.
+
+---
+    @inline block
+
+Give a hint to the compiler that calls within `block` are worth inlining.
+
+```julia
+# The compiler will try to inline `f`
+@inline f(...)
+
+# The compiler will try to inline `f`, `g` and `+`
+@inline f(...) + g(...)
+```
+
+!!! note
+    A callsite annotation always has the precedence over the annotation applied to the
+    definition of the called function:
+    ```julia
+    @noinline function explicit_noinline(args...)
+        # body
+    end
+
+    let
+        @inline explicit_noinline(args...) # will be inlined
+    end
+    ```
+
+!!! note
+    When there are nested callsite annotations, the innermost annotation has the precedence:
+    ```julia
+    @noinline let a0, b0 = ...
+        a = @inline f(a0)  # the compiler will try to inline this call
+        b = f(b0)          # the compiler will NOT try to inline this call
+        return a, b
+    end
+    ```
+
+!!! compat "Julia 1.8"
+    The callsite annotation requires at least Julia 1.8.
 """
 macro inline(ex)
-    esc(isa(ex, Expr) ? pushmeta!(ex, :inline) : ex)
+    return annotate_meta_def_or_block(macroexpand(__module__, ex) , :inline) # expand inner macros which may lead to a definition
 end
 macro inline() Expr(:meta, :inline) end
 
@@ -245,11 +284,51 @@ end
 !!! compat "Julia 1.8"
     The usage within a function body requires at least Julia 1.8.
 
+---
+    @noinline block
+
+Give a hint to the compiler that it should not inline the calls within `block`.
+
+```julia
+# The compiler will try to not inline `f`
+@noinline f(...)
+
+# The compiler will try to not inline `f`, `g` and `+`
+@noinline f(...) + g(...)
+```
+
+!!! note
+    A callsite annotation always has the precedence over the annotation applied to the
+    definition of the called function:
+    ```julia
+    @inline function explicit_inline(args...)
+        # body
+    end
+
+    let
+        @noinline explicit_inline(args...) # will not be inlined
+    end
+    ```
+
+!!! note
+    When there are nested callsite annotations, the innermost annotation has the precedence:
+    ```julia
+    @inline let a0, b0 = ...
+        a = @noinline f(a0)  # the compiler will NOT try to inline this call
+        b = f(b0)            # the compiler will try to inline this call
+        return a, b
+    end
+    ```
+
+!!! compat "Julia 1.8"
+    The callsite annotation requires at least Julia 1.8.
+
+---
 !!! note
     If the function is trivial (for example returning a constant) it might get inlined anyway.
 """
 macro noinline(ex)
-    esc(isa(ex, Expr) ? pushmeta!(ex, :noinline) : ex)
+    return annotate_meta_def_or_block(macroexpand(__module__, ex) , :noinline) # expand inner macros which may lead to a definition
 end
 macro noinline() Expr(:meta, :noinline) end
 
@@ -363,8 +442,22 @@ function findmetaarg(metaargs, sym)
     return 0
 end
 
-function is_short_function_def(ex)
-    ex.head === :(=) || return false
+function annotate_meta_def_or_block(@nospecialize(ex), meta::Symbol)
+    if is_function_def(ex)
+        # annotation on a definition
+        return esc(pushmeta!(ex, meta))
+    else
+        # annotation on a block
+        return Expr(:block,
+                    Expr(meta, true),
+                    Expr(:local, Expr(:(=), :val, esc(ex))),
+                    Expr(meta, false),
+                    :val)
+    end
+end
+
+function is_short_function_def(@nospecialize(ex))
+    isexpr(ex, :(=)) || return false
     while length(ex.args) >= 1 && isa(ex.args[1], Expr)
         (ex.args[1].head === :call) && return true
         (ex.args[1].head === :where || ex.args[1].head === :(::)) || return false
@@ -372,9 +465,11 @@ function is_short_function_def(ex)
     end
     return false
 end
+is_function_def(@nospecialize(ex)) =
+    return isexpr(ex, :function) || is_short_function_def(ex) || isexpr(ex, :->)
 
 function findmeta(ex::Expr)
-    if ex.head === :function || is_short_function_def(ex) || ex.head === :->
+    if is_function_def(ex)
         body = ex.args[2]::Expr
         body.head === :block || error(body, " is not a block expression")
         return findmeta_block(ex.args)
